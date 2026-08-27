@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: btc-aml
+Version: 0.1.0
+Summary: Bitcoin AML graph analytics platform
+Requires-Python: >=3.11
+Requires-Dist: neo4j<6,>=5
+Requires-Dist: pandas>=2.0
+Requires-Dist: requests>=2.31
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: pydantic>=2.6
+Requires-Dist: pydantic-settings>=2.2
+Requires-Dist: loguru>=0.7
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn[standard]>=0.29
