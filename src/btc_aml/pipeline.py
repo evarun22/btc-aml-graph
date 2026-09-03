@@ -3,11 +3,25 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from .blockchain.block_fetcher import fetch_block_by_height, fetch_raw_block, fetch_recent_blocks
+from .analytics.coinjoin import detect_and_alert_coinjoins
+from .analytics.entity_resolution import run_global_entity_resolution
+from .analytics.ofac import (
+    load_ofac_csv,
+    screen_ofac_for_alert_addresses,
+    screen_ofac_for_top_addresses,
+)
+from .analytics.peel_chain import detect_and_alert_peel_chains
+from .analytics.risk_score import compute_risk_scores
+from .analytics.smurfing import detect_and_alert_smurfing_cycles
+from .blockchain.block_fetcher import (
+    fetch_block_by_height,
+    fetch_raw_block,
+    fetch_recent_blocks,
+)
 from .blockchain.tx_fetcher import fetch_address_txs, fetch_tx
 from .ingestion.neo4j_writer import write_tx_graph_rows
 from .ingestion.proportional_matrix import build_tx_graph_rows
-from .maintenance import recompute_address_metrics
+from .maintenance import get_data_quality_summary, recompute_address_metrics
 from .neo4j_client import session
 from .schema import ensure_schema
 from .state import ensure_state, get_last_block_height, set_last_block_height
@@ -109,6 +123,76 @@ def ingest_address(address: str, limit: int = 50) -> int:
 
     logger.info(f"Ingested {count} transactions for address {address}")
     return count
+
+
+def run_analytics(
+    ofac_csv: str | None = None,
+    run_peel: bool = True,
+    run_smurf: bool = True,
+    screen_ofac_limit: int = 2000,
+    max_smurf_pairs: int = 200,
+) -> dict:
+    """
+    Run the full analytics stack:
+    - OFAC load (optional)
+    - CoinJoin detection
+    - entity resolution
+    - peel chains
+    - smurfing
+    - OFAC proximity screening
+    - risk scoring
+    """
+    ensure_schema()
+    ensure_state()
+
+    summary = {}
+
+    if ofac_csv:
+        summary["ofac_addresses_loaded"] = load_ofac_csv(ofac_csv)
+    else:
+        summary["ofac_addresses_loaded"] = 0
+
+    logger.info("Recomputing address metrics before analytics...")
+    recompute_address_metrics()
+
+    logger.info("Running CoinJoin detection...")
+    coinjoin_rows = detect_and_alert_coinjoins()
+    summary["coinjoin_alerts"] = len(coinjoin_rows)
+
+    logger.info("Running entity resolution...")
+    summary["entity_resolution"] = run_global_entity_resolution()
+
+    if run_peel:
+        logger.info("Running peel chain detection...")
+        peel_rows = detect_and_alert_peel_chains()
+        summary["peel_alerts"] = len(peel_rows)
+    else:
+        summary["peel_alerts"] = 0
+
+    if run_smurf:
+        logger.info("Running smurfing detection...")
+        smurf_rows = detect_and_alert_smurfing_cycles(max_pairs=max_smurf_pairs)
+        summary["smurf_alerts"] = len(smurf_rows)
+    else:
+        summary["smurf_alerts"] = 0
+
+    if screen_ofac_limit > 0:
+        logger.info("Screening top addresses for OFAC proximity...")
+        top_screen = screen_ofac_for_top_addresses(limit=screen_ofac_limit)
+        summary["ofac_top_screened"] = len(top_screen)
+
+        logger.info("Screening alert-related addresses for OFAC proximity...")
+        alert_screen = screen_ofac_for_alert_addresses()
+        summary["ofac_alert_addresses_screened"] = len(alert_screen)
+
+    logger.info("Computing final risk scores...")
+    compute_risk_scores()
+
+    summary["pipeline_status"] = get_last_block_height()
+    summary["data_quality"] = get_data_quality_summary()
+
+    logger.info("Analytics run complete.")
+    return summary
 
 
 def run_all(

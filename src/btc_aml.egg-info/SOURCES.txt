@@ -14,6 +14,12 @@ src/btc_aml.egg-info/dependency_links.txt
 src/btc_aml.egg-info/requires.txt
 src/btc_aml.egg-info/top_level.txt
 src/btc_aml/analytics/__init__.py
+src/btc_aml/analytics/coinjoin.py
+src/btc_aml/analytics/entity_resolution.py
+src/btc_aml/analytics/ofac.py
+src/btc_aml/analytics/peel_chain.py
+src/btc_aml/analytics/risk_score.py
+src/btc_aml/analytics/smurfing.py
 src/btc_aml/blockchain/__init__.py
 src/btc_aml/blockchain/block_fetcher.py
 src/btc_aml/blockchain/client.py
