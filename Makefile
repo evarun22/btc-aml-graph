@@ -1,4 +1,4 @@
-.PHONY: install schema ingest-latest status recompute test analytics detect-coinjoin resolve-entities detect-peel detect-smurf load-ofac screen-ofac compute-risk
+.PHONY: install schema ingest-latest status recompute test analytics detect-coinjoin resolve-entities detect-peel detect-smurf load-ofac screen-ofac compute-risk run-api run-web web-install
 
 install:
 	pip install -r requirements.txt
@@ -42,3 +42,11 @@ screen-ofac:
 
 compute-risk:
 	python -m btc_aml.cli compute-risk
+run-api:
+	uvicorn api.main:app --reload --port 8000
+
+web-install:
+	cd web && npm install
+
+run-web:
+	cd web && npm run dev
