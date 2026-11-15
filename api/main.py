@@ -1,9 +1,14 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import get_settings
+from api.routes import ai
 from api.neo4j_service import Neo4jService
 from api.routes import health, kpis, addresses, alerts, entities, ofac, graph
 
@@ -54,3 +59,4 @@ app.include_router(alerts.router)
 app.include_router(entities.router)
 app.include_router(ofac.router)
 app.include_router(graph.router)
+app.include_router(ai.router)

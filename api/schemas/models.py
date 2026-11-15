@@ -1,6 +1,12 @@
+from datetime import datetime
 from typing import Any, Optional
+
 from pydantic import BaseModel
 
+
+# ------------------------------------------------------------------
+# Graph schemas
+# ------------------------------------------------------------------
 
 class GraphNode(BaseModel):
     id: str
@@ -19,6 +25,10 @@ class Graph(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
 
+
+# ------------------------------------------------------------------
+# Address schemas
+# ------------------------------------------------------------------
 
 class AddressReport(BaseModel):
     address: str
@@ -52,6 +62,10 @@ class AddressReport(BaseModel):
     graph: Graph
 
 
+# ------------------------------------------------------------------
+# Alert schemas
+# ------------------------------------------------------------------
+
 class AlertSummary(BaseModel):
     alert_id: str
     typology: Optional[str] = None
@@ -76,6 +90,10 @@ class AlertDetail(BaseModel):
     graph: Graph
 
 
+# ------------------------------------------------------------------
+# Entity schemas
+# ------------------------------------------------------------------
+
 class EntitySummary(BaseModel):
     entity_id: str
     address_count: Optional[int] = None
@@ -94,6 +112,10 @@ class EntityDetail(BaseModel):
     graph: Graph
 
 
+# ------------------------------------------------------------------
+# OFAC schemas
+# ------------------------------------------------------------------
+
 class OfacCheck(BaseModel):
     address: str
     exists: bool
@@ -106,6 +128,10 @@ class OfacCheck(BaseModel):
     tx_count: int = 0
     details: list[dict[str, Any]] = []
 
+
+# ------------------------------------------------------------------
+# KPI / pipeline schemas
+# ------------------------------------------------------------------
 
 class Kpis(BaseModel):
     blocks: int = 0
@@ -131,3 +157,40 @@ class PipelineStatus(BaseModel):
     gds_available: bool = False
     ofac_updated_at: Optional[Any] = None
     heuristic_version: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# AI schemas
+# ------------------------------------------------------------------
+
+class AIStatusResponse(BaseModel):
+    provider: str
+    available: bool
+    model: Optional[str] = None
+    message: Optional[str] = None
+
+
+class ExplainAlertRequest(BaseModel):
+    alert_id: Optional[str] = None
+    alert: Optional[dict[str, Any]] = None
+
+
+class ExplainAlertResponse(BaseModel):
+    alert_id: str
+    explanation: str
+    provider: str
+    model: Optional[str] = None
+    generated_at: datetime
+
+
+class SummarizeAddressRequest(BaseModel):
+    address: str
+
+
+class SummarizeAddressResponse(BaseModel):
+    address: str
+    exists: bool
+    summary: str
+    provider: str
+    model: Optional[str] = None
+    generated_at: datetime
