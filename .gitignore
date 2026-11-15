@@ -18,3 +18,7 @@ dist/
 
 *.log
 .DS_Store
+
+# Local state / scratch
+/state.md/
+state.md/

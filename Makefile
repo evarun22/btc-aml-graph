@@ -43,7 +43,7 @@ screen-ofac:
 compute-risk:
 	python -m btc_aml.cli compute-risk
 run-api:
-	uvicorn api.main:app --reload --port 8000
+	uvicorn api.main:app --reload --port 8010
 
 web-install:
 	cd web && npm install
