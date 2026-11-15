@@ -7,6 +7,7 @@ import PageHeader from "@/components/PageHeader";
 import KpiCard from "@/components/KpiCard";
 import RiskBadge from "@/components/RiskBadge";
 import GraphViewer from "@/components/GraphViewer";
+import AiSummary from "@/components/AiSummary";
 import { getAddress } from "@/lib/api";
 
 export default function AddressDetailPage() {
@@ -53,6 +54,7 @@ export default function AddressDetailPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
+        <AiSummary address={address} />
         <RiskBadge score={report.risk_score} level={report.risk_level} />
         {report.flags?.map((flag: string) => (
           <span

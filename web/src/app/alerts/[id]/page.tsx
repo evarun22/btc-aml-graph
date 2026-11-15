@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import RiskBadge from "@/components/RiskBadge";
 import GraphViewer from "@/components/GraphViewer";
+import AiExplainButton from "@/components/AiExplainButton";
 import { getAlert } from "@/lib/api";
 
 export default function AlertDetailPage() {
@@ -43,6 +44,7 @@ export default function AlertDetailPage() {
       <PageHeader title={alert.alert_id} description={`Typology: ${alert.typology || "N/A"}`} />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
+        <AiExplainButton alertId={alert.alert_id} />
         <RiskBadge score={alert.risk_score} level={alert.severity} />
         <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300">
           Status: {alert.status || "N/A"}

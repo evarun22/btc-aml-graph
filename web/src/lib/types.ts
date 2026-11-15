@@ -120,3 +120,27 @@ export interface PipelineStatus {
   ofac_updated_at: any | null;
   heuristic_version: string | null;
 }
+
+export interface AIStatus {
+  provider: string;
+  available: boolean;
+  model: string | null;
+  message: string | null;
+}
+
+export interface ExplainAlertResponse {
+  alert_id: string;
+  explanation: string;
+  provider: string;
+  model: string | null;
+  generated_at: string;
+}
+
+export interface SummarizeAddressResponse {
+  address: string;
+  exists: boolean;
+  summary: string;
+  provider: string;
+  model: string | null;
+  generated_at: string;
+}

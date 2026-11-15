@@ -1,5 +1,6 @@
 "use client";
 
+import AiStatusBadge from "@/components/AiStatusBadge";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -23,6 +24,7 @@ export default function Navbar() {
         </Link>
 
         <div className="flex flex-wrap items-center gap-4">
+          <AiStatusBadge />
           {links.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
             return (

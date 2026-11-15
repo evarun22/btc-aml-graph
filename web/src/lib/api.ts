@@ -1,3 +1,9 @@
+import type {
+  AIStatus,
+  ExplainAlertResponse,
+  SummarizeAddressResponse,
+} from "./types";
+
 const API_BASE = "/api";
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -54,3 +60,46 @@ export const getOfacExposure = (limit = 50) =>
 
 export const getSubgraph = (address: string, depth = 1, max_nodes = 150) =>
   fetchJson<any>(`/graph/subgraph${buildQuery({ address, depth, max_nodes })}`);
+
+async function postJSON<T>(
+  path: string,
+  body: unknown,
+  timeoutMs = 300000,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `AI request failed: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const getAIStatus = () => fetchJson<AIStatus>("/ai/status");
+
+export const explainAlert = (alertId: string) =>
+  postJSON<ExplainAlertResponse>(
+    "/ai/explain-alert",
+    { alert_id: alertId },
+  );
+
+export const summarizeAddress = (address: string) =>
+  postJSON<SummarizeAddressResponse>(
+    "/ai/summarize-address",
+    { address },
+  );
