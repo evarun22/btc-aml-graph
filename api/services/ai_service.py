@@ -1,6 +1,9 @@
 import os
 import json
 import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -9,15 +12,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-class AIProviderUnavailableError(Exception):
-    """
-    Raised when the AI provider is disabled, unreachable, or misconfigured.
-    """
-
-
 class AIProviderError(Exception):
     """
-    Raised when the AI provider is reachable but returns an unexpected error.
+    Base error for AI provider failures.
+    """
+
+
+class AIProviderUnavailableError(AIProviderError):
+    """
+    Raised when the AI provider is disabled, unreachable, or misconfigured.
     """
 
 
@@ -36,6 +39,30 @@ class AIService:
         # Context safety settings
         self.max_context_items = int(os.getenv("AI_MAX_CONTEXT_ITEMS", "10"))
         self.max_string_chars = int(os.getenv("AI_MAX_STRING_CHARS", "500"))
+        self.max_prompt_chars = int(os.getenv("AI_MAX_PROMPT_CHARS", "12000"))
+
+        # Audit logging settings
+        self.audit_enabled = os.getenv("AI_AUDIT_LOG", "true").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.audit_path = Path(os.getenv("AI_AUDIT_LOG_PATH", "logs/ai_audit.jsonl"))
+
+        # Sensitive key patterns that should never be sent to the model.
+        self.sensitive_key_patterns = (
+            "password",
+            "passwd",
+            "secret",
+            "api_key",
+            "apikey",
+            "token",
+            "authorization",
+            "private_key",
+            "access_key",
+            "credential",
+        )
 
         # Ollama
         self.ollama_base_url = os.getenv(
@@ -110,6 +137,39 @@ class AIService:
             "Keep the answer concise, structured, and suitable for a compliance dashboard."
         )
 
+    def _is_sensitive_key(self, key: Any) -> bool:
+        """
+        Return True if a dictionary key looks like a secret or credential.
+        """
+        key_str = str(key).lower()
+
+        return any(
+            pattern in key_str
+            for pattern in self.sensitive_key_patterns
+        )
+
+    def _redact_sensitive(self, value: Any) -> Any:
+        """
+        Recursively redact values whose keys look sensitive.
+
+        This prevents accidental leakage of secrets into model prompts.
+        """
+        if isinstance(value, dict):
+            redacted = {}
+
+            for key, item in value.items():
+                if self._is_sensitive_key(key):
+                    redacted[key] = "[REDACTED]"
+                else:
+                    redacted[key] = self._redact_sensitive(item)
+
+            return redacted
+
+        if isinstance(value, list):
+            return [self._redact_sensitive(item) for item in value]
+
+        return value
+
     def _sanitize_value(self, value: Any) -> Any:
         """
         Prevent extremely large strings or nested structures from being sent
@@ -145,6 +205,40 @@ class AIService:
 
         return safe
 
+    def _prepare_context(self, data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Prepare structured data safely for the model.
+
+        This:
+        - redacts sensitive keys
+        - truncates large lists
+        - truncates long strings
+        - removes large graph payloads
+        """
+        if not isinstance(data, dict):
+            return {}
+
+        safe_data = self._redact_sensitive(data)
+        safe_data = self._truncate_context(safe_data)
+
+        # Graph payloads are usually too large and not useful
+        # for plain-English explanations or summaries.
+        safe_data.pop("graph", None)
+
+        return safe_data
+
+    def _limit_prompt(self, prompt: str) -> str:
+        """
+        Cap the final prompt size before sending it to the model.
+        """
+        if len(prompt) <= self.max_prompt_chars:
+            return prompt
+
+        return (
+            prompt[: self.max_prompt_chars]
+            + "\n\n[context truncated for model limit]"
+        )
+
     def _json_dumps(self, data: Any) -> str:
         return json.dumps(
             data,
@@ -152,6 +246,51 @@ class AIService:
             default=str,
             ensure_ascii=False,
         )
+
+    def _write_audit_log(
+        self,
+        endpoint: str,
+        status: str,
+        started_at: float,
+        prompt_chars: Optional[int] = None,
+        output_chars: Optional[int] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """
+        Write a single JSON line to the AI audit log.
+
+        Example:
+            logs/ai_audit.jsonl
+        """
+        if not self.audit_enabled:
+            return
+
+        record = {
+            "endpoint": endpoint,
+            "provider": self.provider,
+            "model": self.current_model(),
+            "status": status,
+            "latency_ms": int((time.perf_counter() - started_at) * 1000),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if prompt_chars is not None:
+            record["prompt_chars"] = prompt_chars
+
+        if output_chars is not None:
+            record["output_chars"] = output_chars
+
+        if error:
+            record["error"] = str(error)[:500]
+
+        try:
+            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with self.audit_path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, default=str) + "\n")
+
+        except Exception:
+            logger.exception("Failed to write AI audit log")
 
     def _extract_openai_content(self, data: dict[str, Any]) -> str:
         """
@@ -534,50 +673,140 @@ class AIService:
         )
 
     def explain_alert(self, alert: dict[str, Any]) -> str:
-        safe_alert = self._truncate_context(alert)
+        started_at = time.perf_counter()
+        prompt_chars: Optional[int] = None
 
-        # The graph object is usually large and is not needed
-        # for a plain-English alert explanation.
-        safe_alert.pop("graph", None)
+        try:
+            safe_alert = self._prepare_context(alert)
 
-        prompt = (
-            "/no_think\n"
-            "Explain this Bitcoin AML alert in plain English.\n\n"
-            "Alert JSON:\n"
-            f"{self._json_dumps(safe_alert)}\n\n"
-            "Explain:\n"
-            "1. What the alert means.\n"
-            "2. Why it is relevant for AML/compliance review.\n"
-            "3. What evidence an analyst should inspect next.\n"
-            "Keep the answer concise and professional."
-        )
+            prompt = (
+                "/no_think\n"
+                "Explain this Bitcoin AML alert in plain English.\n\n"
+                "Alert JSON:\n"
+                f"{self._json_dumps(safe_alert)}\n\n"
+                "Explain:\n"
+                "1. What the alert means.\n"
+                "2. Why it is relevant for AML/compliance review.\n"
+                "3. What evidence an analyst should inspect next.\n"
+                "Keep the answer concise and professional."
+            )
 
-        return self.generate(prompt)
+            prompt = self._limit_prompt(prompt)
+            prompt_chars = len(prompt)
 
+            explanation = self.generate(prompt)
+
+            if not explanation:
+                raise AIProviderError("AI provider returned empty content")
+
+            self._write_audit_log(
+                endpoint="explain-alert",
+                status="success",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                output_chars=len(explanation),
+            )
+
+            return explanation
+
+        except AIProviderUnavailableError:
+            self._write_audit_log(
+                endpoint="explain-alert",
+                status="unavailable",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error="AI provider unavailable",
+            )
+            raise
+
+        except AIProviderError:
+            self._write_audit_log(
+                endpoint="explain-alert",
+                status="provider_error",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error="AI provider error",
+            )
+            raise
+
+        except Exception as exc:
+            self._write_audit_log(
+                endpoint="explain-alert",
+                status="error",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error=exc,
+            )
+            raise AIProviderError("AI provider request failed") from exc
 
     def summarize_address(self, address_report: dict[str, Any]) -> str:
-        safe_report = self._truncate_context(address_report)
+        started_at = time.perf_counter()
+        prompt_chars: Optional[int] = None
 
-        # The graph object is usually large and is not needed
-        # for a short address risk summary.
-        safe_report.pop("graph", None)
+        try:
+            safe_report = self._prepare_context(address_report)
 
-        prompt = (
-            "/no_think\n"
-            "Summarize the risk profile of this Bitcoin address in plain English.\n\n"
-            "Address report JSON:\n"
-            f"{self._json_dumps(safe_report)}\n\n"
-            "Explain:\n"
-            "1. Overall risk level.\n"
-            "2. Key red flags.\n"
-            "3. OFAC exposure, if present.\n"
-            "4. Entity membership, if present.\n"
-            "5. What an analyst should review next.\n"
-            "Keep the answer concise and professional."
-        )
+            prompt = (
+                "/no_think\n"
+                "Summarize the risk profile of this Bitcoin address in plain English.\n\n"
+                "Address report JSON:\n"
+                f"{self._json_dumps(safe_report)}\n\n"
+                "Explain:\n"
+                "1. Overall risk level.\n"
+                "2. Key red flags.\n"
+                "3. OFAC exposure, if present.\n"
+                "4. Entity membership, if present.\n"
+                "5. What an analyst should review next.\n"
+                "Keep the answer concise and professional."
+            )
 
-        return self.generate(prompt)
+            prompt = self._limit_prompt(prompt)
+            prompt_chars = len(prompt)
 
+            summary = self.generate(prompt)
+
+            if not summary:
+                raise AIProviderError("AI provider returned empty content")
+
+            self._write_audit_log(
+                endpoint="summarize-address",
+                status="success",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                output_chars=len(summary),
+            )
+
+            return summary
+
+        except AIProviderUnavailableError:
+            self._write_audit_log(
+                endpoint="summarize-address",
+                status="unavailable",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error="AI provider unavailable",
+            )
+            raise
+
+        except AIProviderError:
+            self._write_audit_log(
+                endpoint="summarize-address",
+                status="provider_error",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error="AI provider error",
+            )
+            raise
+
+        except Exception as exc:
+            self._write_audit_log(
+                endpoint="summarize-address",
+                status="error",
+                started_at=started_at,
+                prompt_chars=prompt_chars,
+                error=exc,
+            )
+            raise AIProviderError("AI provider request failed") from exc
 
 
 ai_service = AIService()

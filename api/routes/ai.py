@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -27,6 +28,7 @@ from api.dependencies import (
 from api.utils.address_validation import validate_address as is_valid_bitcoin_address
 
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -78,6 +80,9 @@ def explain_alert(
         except KeyError:
             raise HTTPException(status_code=404, detail="Alert not found")
 
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
     elif request.alert:
         alert = request.alert
 
@@ -87,24 +92,39 @@ def explain_alert(
             detail="Provide either alert_id or alert object",
         )
 
+    try:
+        alert_dict = _to_dict(alert)
+    except Exception:
+        logger.exception("Failed to convert alert to dict")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to prepare alert context",
+        )
+
     if not ai_service.is_available():
         raise HTTPException(
             status_code=503,
             detail="AI assistant is unavailable. Please try again later.",
         )
 
-    alert_dict = _to_dict(alert)
-
     try:
         explanation = ai_service.explain_alert(alert_dict)
+
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    except AIProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    except Exception:
+
+    except AIProviderError:
+        logger.exception("AI explain-alert provider error")
         raise HTTPException(
             status_code=502,
             detail="AI provider request failed",
+        )
+
+    except Exception:
+        logger.exception("Unexpected AI explain-alert error")
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected AI error",
         )
 
     alert_id = alert_dict.get("alert_id") or request.alert_id or "unknown"
@@ -125,13 +145,24 @@ def summarize_address(
 ):
     address = request.address.strip()
 
-    if not is_valid_bitcoin_address(address):
+    validated_address = is_valid_bitcoin_address(address)
+
+    if not validated_address:
         raise HTTPException(status_code=422, detail="Invalid Bitcoin address")
+
+    # Use the validated/normalized address for all downstream work.
+    address = validated_address
 
     try:
         report = address_service.get_report(address)
     except KeyError:
         report = None
+    except Exception:
+        logger.exception("Failed to fetch address report")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch address report",
+        )
 
     report_dict = _to_dict(report)
 
@@ -153,14 +184,22 @@ def summarize_address(
 
     try:
         summary = ai_service.summarize_address(report_dict)
+
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    except AIProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    except Exception:
+
+    except AIProviderError:
+        logger.exception("AI summarize-address provider error")
         raise HTTPException(
             status_code=502,
             detail="AI provider request failed",
+        )
+
+    except Exception:
+        logger.exception("Unexpected AI summarize-address error")
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected AI error",
         )
 
     return SummarizeAddressResponse(

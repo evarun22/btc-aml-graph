@@ -22,3 +22,8 @@ dist/
 # Local state / scratch
 /state.md/
 state.md/
+
+# AI / app logs
+/logs/
+*.log
+logs/ai_audit.jsonl
