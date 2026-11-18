@@ -1,3 +1,5 @@
+from loguru import logger
+
 from .neo4j_client import session
 
 
@@ -31,7 +33,26 @@ def get_last_block_height() -> int:
     return int(record["last_block_height"]) if record else -1
 
 
-def set_last_block_height(height: int) -> None:
+def set_last_block_height(height: int, force: bool = False) -> bool:
+    """
+    Set the pipeline checkpoint height.
+
+    By default this is monotonic:
+    - it can increase the checkpoint
+    - it can stay the same
+    - it will not decrease the checkpoint
+
+    Use force=True only for manual recovery / admin operations.
+    """
+    current = get_last_block_height()
+
+    if not force and height < current:
+        logger.info(
+            f"Ignoring non-monotonic checkpoint update: "
+            f"requested={height}, current={current}"
+        )
+        return False
+
     with session() as s:
         s.run(
             """
@@ -42,6 +63,9 @@ def set_last_block_height(height: int) -> None:
             name=STATE_NAME,
             height=height,
         )
+
+    logger.info(f"Pipeline checkpoint set to height {height}")
+    return True
 
 
 def get_pipeline_status() -> dict:

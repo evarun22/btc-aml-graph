@@ -72,9 +72,27 @@ def ingest_block(height: int) -> bool:
     return True
 
 
-def ingest_blocks(start_height: int, end_height: int) -> None:
+def ingest_blocks(
+    start_height: int,
+    end_height: int,
+    allow_historical: bool = False,
+) -> None:
     ensure_schema()
     ensure_state()
+
+    current = get_last_block_height()
+
+    if current is not None and end_height <= current:
+        if allow_historical:
+            logger.info(
+                f"Historical backfill requested: "
+                f"{start_height}-{end_height}, current tip={current}"
+            )
+        else:
+            logger.warning(
+                f"Block range {start_height}-{end_height} is at or below "
+                f"current tip {current}. Use --allow-historical for intentional backfill."
+            )
 
     for height in range(start_height, end_height + 1):
         ingest_block(height)

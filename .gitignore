@@ -16,14 +16,18 @@ node_modules/
 out/
 dist/
 
-*.log
+
 .DS_Store
 
 # Local state / scratch
 /state.md/
 state.md/
+.state/
+
 
 # AI / app logs
 /logs/
 *.log
 logs/ai_audit.jsonl
+monitor.pid
+

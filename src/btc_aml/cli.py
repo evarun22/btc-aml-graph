@@ -16,6 +16,7 @@ from .maintenance import (
     recompute_address_metrics,
     reset_database,
 )
+from .monitor import run_monitor
 from .neo4j_client import session
 from .pipeline import (
     export_flows_to_csv,
@@ -27,7 +28,7 @@ from .pipeline import (
     run_analytics,
 )
 from .schema import ensure_schema
-from .state import get_pipeline_status
+from .state import get_pipeline_status, set_last_block_height
 
 
 def main() -> None:
@@ -36,12 +37,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Bitcoin AML Graph CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Existing core commands
+    # Core commands
     subparsers.add_parser("schema", help="Create schema constraints and indexes")
 
     p_ingest_blocks = subparsers.add_parser("ingest-blocks")
     p_ingest_blocks.add_argument("--start", type=int, required=True)
     p_ingest_blocks.add_argument("--end", type=int, required=True)
+    p_ingest_blocks.add_argument(
+        "--allow-historical",
+        action="store_true",
+        help="Allow ingesting blocks at or below the current checkpoint.",
+    )
 
     p_ingest_latest = subparsers.add_parser("ingest-latest")
     p_ingest_latest.add_argument("--limit", type=int, default=10)
@@ -100,6 +106,41 @@ def main() -> None:
     p_analytics.add_argument("--screen-limit", type=int, default=2000)
     p_analytics.add_argument("--max-smurf-pairs", type=int, default=200)
 
+    # Monitor / operations commands
+    p_monitor = subparsers.add_parser("monitor")
+    p_monitor.add_argument(
+        "--interval",
+        type=int,
+        default=600,
+        help="Seconds between monitor iterations.",
+    )
+    p_monitor.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum number of new blocks to fetch per iteration.",
+    )
+    p_monitor.add_argument(
+        "--analytics-every",
+        type=int,
+        default=100,
+        help="Rerun analytics every N newly ingested blocks. Use 0 to disable.",
+    )
+    p_monitor.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Stop after N iterations. Use 0 to run forever.",
+    )
+
+    p_set_last = subparsers.add_parser("set-last-height")
+    p_set_last.add_argument("--height", type=int, required=True)
+    p_set_last.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow decreasing the checkpoint. Use carefully.",
+    )
+
     args = parser.parse_args()
 
     # Core commands
@@ -107,7 +148,11 @@ def main() -> None:
         ensure_schema()
 
     elif args.command == "ingest-blocks":
-        ingest_blocks(start_height=args.start, end_height=args.end)
+        ingest_blocks(
+            start_height=args.start,
+            end_height=args.end,
+            allow_historical=args.allow_historical,
+        )
 
     elif args.command == "ingest-latest":
         ingest_latest(limit=args.limit)
@@ -181,6 +226,18 @@ def main() -> None:
             screen_ofac_limit=args.screen_limit,
             max_smurf_pairs=args.max_smurf_pairs,
         )
+
+    # Monitor / operations commands
+    elif args.command == "monitor":
+        run_monitor(
+            interval_seconds=args.interval,
+            limit=args.limit,
+            analytics_every=args.analytics_every,
+            max_iterations=args.max_iterations,
+        )
+
+    elif args.command == "set-last-height":
+        set_last_block_height(args.height, force=args.force)
 
 
 if __name__ == "__main__":
