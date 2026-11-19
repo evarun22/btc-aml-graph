@@ -15,7 +15,10 @@ RETURN start.id AS origin,
        second.id AS current_node,
        r.transferred_btc AS vol,
        r.tx_hash AS tx_hash
+ORDER BY r.transferred_btc DESC
+LIMIT $max_anchors
 """
+
 
 
 HOP_QUERY = """
@@ -108,7 +111,9 @@ def detect_and_alert_peel_chains(
             ANCHORS_QUERY,
             min_btc=min_starting_btc,
             mixer_hashes=mixer_hashes,
+            max_anchors=max_active_chains,
         ).data()
+
 
     if not anchors:
         logger.info("No peel chain anchors found.")

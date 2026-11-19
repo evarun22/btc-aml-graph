@@ -9,15 +9,22 @@ BATCH_SIZE = 500
 SOURCES_QUERY = """
 MATCH (s:Address)
 WHERE count { (s)-[:SENT]->() } >= $thresh
+  AND coalesce(s.btc_spent_actual, 0.0) > 1.0
 RETURN s.id AS id
+ORDER BY id
+LIMIT 500
 """
 
 
 SINKS_QUERY = """
 MATCH (s:Address)
 WHERE count { ()-[:SENT]->(s) } >= $thresh
+  AND coalesce(s.btc_received_actual, 0.0) > 1.0
 RETURN s.id AS id
+ORDER BY id
+LIMIT 500
 """
+
 
 
 def _build_path_query(max_depth: int) -> str:
