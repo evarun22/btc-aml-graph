@@ -1,5 +1,5 @@
-PYTHON ?= python
-UVICORN ?= uvicorn
+PYTHON ?= .venv/bin/python
+UVICORN ?= .venv/bin/uvicorn
 COMPOSE ?= docker compose
 
 RANGE_START ?= 960000
@@ -28,6 +28,9 @@ help: ## Show available Makefile commands
 install: ## Install Python dependencies
 	$(PYTHON) -m pip install -r requirements.txt
 	$(PYTHON) -m pip install -e .
+
+activate-venv: ## Activate Python virtual environment
+	bash -c "source .venv/bin/activate"
 
 up: ## Start Neo4j
 	$(COMPOSE) up -d neo4j
