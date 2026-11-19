@@ -9,7 +9,7 @@ from .utxo_ingest import (
 )
 
 
-BATCH_SIZE = 2000
+BATCH_SIZE = 5000
 
 
 def execute_batched(session, query: str, rows: list[dict], **params) -> None:

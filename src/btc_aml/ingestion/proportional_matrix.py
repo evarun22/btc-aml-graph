@@ -141,22 +141,40 @@ def build_tx_graph_rows(
         "proportional_skipped": False,
     }
 
+    input_values_by_address: dict[str, int] = {}
+
+    for inp in inputs:
+        addr = inp["address"]
+        value = inp["value_satoshi"]
+        input_values_by_address[addr] = (
+            input_values_by_address.get(addr, 0) + value
+        )
+
+    output_values_by_address: dict[str, int] = {}
+
+    for out in outputs:
+        addr = out["address"]
+        value = out["value_satoshi"]
+        output_values_by_address[addr] = (
+            output_values_by_address.get(addr, 0) + value
+        )
+
     input_rows = [
         {
             "tx_hash": tx_hash,
-            "address": i["address"],
-            "value_satoshi": i["value_satoshi"],
+            "address": addr,
+            "value_satoshi": value,
         }
-        for i in inputs
+        for addr, value in input_values_by_address.items()
     ]
 
     output_rows = [
         {
             "tx_hash": tx_hash,
-            "address": o["address"],
-            "value_satoshi": o["value_satoshi"],
+            "address": addr,
+            "value_satoshi": value,
         }
-        for o in outputs
+        for addr, value in output_values_by_address.items()
     ]
 
     raw_flows = []

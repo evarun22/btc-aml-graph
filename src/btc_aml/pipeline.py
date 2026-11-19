@@ -49,7 +49,17 @@ def _ingest_tx_data(
     return True
 
 
-def ingest_block(height: int) -> bool:
+def _write_tx_graph_rows_batch(rows: list[dict]) -> int:
+    if not rows:
+        return 0
+
+    with session() as s:
+        write_tx_graph_rows(s, rows)
+
+    return len(rows)
+
+
+def ingest_block(height: int, batch_size: int = 100) -> bool:
     summary = fetch_block_by_height(height)
 
     if not summary:
@@ -57,25 +67,39 @@ def ingest_block(height: int) -> bool:
         return False
 
     raw_block = fetch_raw_block(summary["hash"])
+
+    rows: list[dict] = []
     ingested_count = 0
 
     for tx in raw_block.get("tx", []):
-        if _ingest_tx_data(
+        row = build_tx_graph_rows(
             tx=tx,
             block_hash=raw_block.get("hash"),
             block_height=height,
             block_time=raw_block.get("time"),
-        ):
+        )
+
+        if row:
+            rows.append(row)
             ingested_count += 1
+
+        if len(rows) >= batch_size:
+            _write_tx_graph_rows_batch(rows)
+            rows = []
+
+    if rows:
+        _write_tx_graph_rows_batch(rows)
 
     logger.info(f"Ingested {ingested_count} transactions from block {height}")
     return True
+
 
 
 def ingest_blocks(
     start_height: int,
     end_height: int,
     allow_historical: bool = False,
+    batch_size: int = 100,
 ) -> None:
     ensure_schema()
     ensure_state()
@@ -95,8 +119,9 @@ def ingest_blocks(
             )
 
     for height in range(start_height, end_height + 1):
-        ingest_block(height)
+        ingest_block(height, batch_size=batch_size)
         set_last_block_height(height)
+
 
 
 def ingest_latest(limit: int = 10) -> list[int]:

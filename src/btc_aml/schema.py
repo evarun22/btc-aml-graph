@@ -22,6 +22,11 @@ CONSTRAINTS = [
     FOR (al:Alert)
     REQUIRE al.alert_id IS UNIQUE
     """,
+    """
+    CREATE CONSTRAINT entity_id_unique IF NOT EXISTS
+    FOR (e:Entity)
+    REQUIRE e.entity_id IS UNIQUE
+    """
 ]
 
 
@@ -30,6 +35,11 @@ INDEXES = [
     CREATE INDEX address_id_index IF NOT EXISTS
     FOR (a:Address)
     ON (a.id)
+    """,
+    """
+    CREATE INDEX tx_block_height_index IF NOT EXISTS
+    FOR (t:Tx)
+    ON (t.block_height)
     """,
     """
     CREATE INDEX tx_hash_index IF NOT EXISTS
