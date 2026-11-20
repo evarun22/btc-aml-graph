@@ -35,6 +35,7 @@ class AIService:
         # Generation settings
         self.temperature = float(os.getenv("AI_TEMPERATURE", "0.2"))
         self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "600"))
+        self.reasoning_effort = os.getenv("AI_REASONING_EFFORT", "").strip()
 
         # Context safety settings
         self.max_context_items = int(os.getenv("AI_MAX_CONTEXT_ITEMS", "10"))
@@ -294,25 +295,41 @@ class AIService:
 
     def _extract_openai_content(self, data: dict[str, Any]) -> str:
         """
-        Extract content from an OpenAI-compatible response.
-        Used by llama.cpp and OpenAI.
+        Extract an answer from an OpenAI-compatible response.
+
+        llama.cpp runs with --reasoning on, so the reply can legitimately arrive
+        with an empty "content" and the text under "reasoning_content". Treat that
+        as a usable answer instead of a provider failure, and report a real
+        token-budget exhaustion as its own distinct error.
         """
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice.get("message") or {}
         except (KeyError, IndexError, TypeError) as exc:
             raise AIProviderError(
                 "Unexpected OpenAI-compatible response format"
             ) from exc
 
-        if content is None:
-            raise AIProviderError("AI provider returned empty content")
+        content = str(message.get("content") or "").strip()
 
-        content = str(content).strip()
+        if content:
+            return content
 
-        if not content:
-            raise AIProviderError("AI provider returned empty content")
+        reasoning = str(message.get("reasoning_content") or "").strip()
 
-        return content
+        if reasoning:
+            logger.warning(
+                "AI returned empty content; falling back to reasoning_content (%d chars)",
+                len(reasoning),
+            )
+            return reasoning
+
+        if choice.get("finish_reason") == "length":
+            raise AIProviderError(
+                "Model reached the token limit before producing an answer"
+            )
+
+        raise AIProviderError("AI provider returned empty content")
 
     # ------------------------------------------------------------------
     # llama.cpp helpers
@@ -399,6 +416,12 @@ class AIService:
                 },
             ],
         }
+
+        if self.reasoning_effort:
+            payload["chat_template_kwargs"] = {
+                "reasoning_effort": self.reasoning_effort,
+                "preserve_thinking": False,
+            }
 
         try:
             with httpx.Client(
@@ -680,7 +703,6 @@ class AIService:
             safe_alert = self._prepare_context(alert)
 
             prompt = (
-                "/no_think\n"
                 "Explain this Bitcoin AML alert in plain English.\n\n"
                 "Alert JSON:\n"
                 f"{self._json_dumps(safe_alert)}\n\n"
@@ -747,7 +769,6 @@ class AIService:
             safe_report = self._prepare_context(address_report)
 
             prompt = (
-                "/no_think\n"
                 "Summarize the risk profile of this Bitcoin address in plain English.\n\n"
                 "Address report JSON:\n"
                 f"{self._json_dumps(safe_report)}\n\n"
