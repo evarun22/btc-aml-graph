@@ -31,3 +31,10 @@ state.md/
 logs/ai_audit.jsonl
 monitor.pid
 
+
+src/*.egg-info/
+*.egg-info/
+
+*.bak
+*.bak[0-9]
+Makefile.bak*
