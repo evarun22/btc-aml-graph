@@ -21,7 +21,7 @@ LOG_DIR ?= logs
 TS = $(shell date +%Y%m%d-%H%M%S)
 
 # --- pre-flight gate -------------------------------------------------------
-GUARD ?= 1                    # GUARD=0 to override deliberately
+GUARD := 1                    # GUARD=0 to override deliberately
 GUARD_MIN_GIB ?= 48
 LLAMA_SERVICE ?= llama-server.service
 # ---------------------------------------------------------------------------
@@ -31,6 +31,24 @@ SMURF_MAX_DEPTH ?= 4
 OFAC_LIMIT ?= 500
 PEEL_MIN_BTC ?= 1.0
 
+#@@ ── Bitcoin AML Graph — operations map ─────────────────────────────────────────
+#@@   Truth        status-all · ops · mem · watch · tail-all · status · ps · logs
+#@@   App          app-up · app-down · api (foreground) · web (dev) · web-build · web-start
+#@@   Pipeline     schema · p1-recompute · p2-coinjoin · p3-entities · p4-peel · p5-smurf · p6-ofac · p7-risk
+#@@   Presets      run-tail (~2 min) · run-nightly (~10 min) · run-full (10-25 min)
+#@@   Ingestion    ingest-latest · ingest-range RANGE_START=… RANGE_END=… · backfill(-100/1000/5000) · load-ofac
+#@@   Safe window  maintenance STAGES="…" · maintenance-full   (stop LLM → work → restore LLM+gateway)
+#@@   Monitor      monitor · monitor-once · monitor-bg · stop-monitor · monitor-service · stop-monitor-service
+#@@   LLM          ai-stop · ai-start · ai-status · ai-logs
+#@@   Docker stack up · down · compose-up · compose-down · compose-logs
+#@@   Dev          install · test · lint
+#@@   Danger       reset (deletes the graph) · clean (deletes .state/ and logs/)
+#@@
+#@@   FIXED ORDER   1 recompute → 2 coinjoin → 3 entities → 4 peel → 5 smurf → 6 ofac → 7 risk
+#@@                 risk is always last (it reads the alerts the others create)
+#@@                 entities must follow coinjoin (CIOH excludes mixer transactions)
+#@@   RULE          heavy work needs llama stopped (guard). The run-* presets do the stop/restore for you.
+#@@   TIP           nothing runs by itself: no monitor, no timers. You are the scheduler.
 .PHONY: help install up down ps logs schema status recompute test lint \
 	guard analytics analytics-staged detect-coinjoin resolve-entities detect-peel \
 	detect-smurf screen-ofac screen-ofac-alerts compute-risk \
@@ -41,10 +59,11 @@ PEEL_MIN_BTC ?= 1.0
 	ai-stop ai-start ai-status ai-logs mem watch \
 	maintenance-install maintenance-run maintenance-full maintenance-status
 
-help: ## Show available Makefile commands
-	@echo "Bitcoin AML Graph Intelligence Platform"
+help: ## Show the operations map and every target
+	@sed -n "/^#@@ /p" $(MAKEFILE_LIST) | sed "s/^#@@ //"
 	@echo ""
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
+	@echo "All targets:"
+	@grep -hE "^[a-zA-Z0-9_.-]+:.*?## " $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
 guard: ## Refuse heavy jobs unless llama-server is stopped and memory is free
 	@if [ "$(GUARD)" = "1" ]; then \
@@ -229,8 +248,6 @@ maintenance-install: ## Install the analytics maintenance units + timers
 maintenance-run: ## Run the staged maintenance window now (stops llama, restores it after)
 	sudo systemctl start btc-aml-analytics.service
 
-maintenance-full: ## Run the full window incl. CIOH rebuild now
-	sudo systemctl start btc-aml-analytics-full.service
 
 maintenance-status: ## Timers, last result and journal for the maintenance window
 	@systemctl list-timers 'btc-aml-*' --all; echo; \
@@ -268,3 +285,78 @@ monitor-service: guard ## Start monitor as Docker Compose service
 
 stop-monitor-service: ## Stop monitor Docker Compose service
 	$(COMPOSE) --profile monitor stop monitor
+
+# --- one-command wrappers -------------------------------------------------
+maintenance: ## Stop LLM, run analytics stages, restore LLM + gateway. STAGES="risk" etc.
+	sudo STAGES="$(STAGES)" ./scripts/scheduled_analytics.sh
+
+maintenance-full: ## Full window incl. CoinJoin + entity rebuild (slow, deliberate)
+	sudo STAGES="full" ./scripts/scheduled_analytics.sh
+
+app-up: ## Start API + dashboard in the background (logs to logs/, pids in .state/)
+	@mkdir -p $(LOG_DIR) $(STATE_DIR)
+	@nohup $(UVICORN) api.main:app --port $(API_PORT) > $(LOG_DIR)/api.log 2>&1 & echo $$! > $(STATE_DIR)/api.pid
+	@cd web && nohup npm run start > ../$(LOG_DIR)/web.log 2>&1 & echo $$! > $(STATE_DIR)/web.pid
+	@sleep 8; echo "API -> http://localhost:$(API_PORT)/docs"; echo "WEB -> http://localhost:3000"
+
+app-down: ## Stop the background API + dashboard
+	@pkill -f "[u]vicorn api.main:app" 2>/dev/null || true
+	@pkill -f "[n]ext-server" 2>/dev/null || true
+	@rm -f $(STATE_DIR)/api.pid $(STATE_DIR)/web.pid; echo "app stopped"
+
+status-all: ## One screen of truth: services, endpoints, memory
+	@printf "llama   : %s\n" "$$(systemctl is-active llama-server.service)"
+	@printf "gateway : %s\n" "$$(systemctl is-active ai-gateway.service)"
+	@printf "api     : %s\n" "$$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:8010/api/health || echo down)"
+	@printf "web     : %s\n" "$$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000 || echo down)"
+	@free -h | head -2
+
+# --- ordered pipeline stages (fixed order: 1..7) ----------------------------
+.PHONY: p1-recompute p2-coinjoin p3-entities p4-peel p5-smurf p6-ofac p7-risk \
+	run-tail run-nightly run-full ops tail-all
+
+p1-recompute: recompute ## Stage 1 - address metrics (received/spent/first-seen)
+p2-coinjoin: detect-coinjoin ## Stage 2 - CoinJoin/mixer alerts
+p3-entities: resolve-entities ## Stage 3 - CIOH entities (10-25 min, the expensive one)
+p4-peel: detect-peel ## Stage 4 - peel chain alerts
+p5-smurf: detect-smurf ## Stage 5 - smurfing (SMURF_MAX_PAIRS / SMURF_MAX_DEPTH)
+p6-ofac: screen-ofac-alerts ## Stage 6 - OFAC proximity (alert addresses, then top N)
+	@$(MAKE) screen-ofac OFAC_LIMIT=$(OFAC_LIMIT)
+p7-risk: compute-risk ## Stage 7 - risk scores. ALWAYS LAST.
+
+run-tail: ## Safe window, cheap: smurf -> ofac -> risk -> status (~2 min)
+	@$(MAKE) maintenance STAGES="smurf ofac risk status"
+
+run-nightly: ## Safe window, normal: ingest -> recompute -> peel -> smurf -> ofac -> risk -> status
+	@$(MAKE) maintenance STAGES="ingest recompute peel smurf ofac risk status"
+
+run-full: ## Safe window, weekly: adds coinjoin + entity rebuild (10-25 min)
+	@$(MAKE) maintenance STAGES="ingest recompute coinjoin entities peel smurf ofac risk status"
+
+ops: ## One screen of truth: services, endpoints, checkpoint, last run, last AI call
+	@echo "=== $(shell date '+%F %T %Z') ==="
+	@printf "llama   : %s\n" "$$(systemctl is-active llama-server.service)"
+	@printf "gateway : %s\n" "$$(systemctl is-active ai-gateway.service)"
+	@printf "caddy   : %s\n" "$$(systemctl is-active caddy)"
+	@printf "neo4j   : %s\n" "$$(docker compose ps neo4j --format '{{.Status}}' 2>/dev/null || echo down)"
+	@printf "monitor : %s\n" "$$(pgrep -f '[b]tc_aml.cli monitor' >/dev/null && echo RUNNING || echo 'not running')"
+	@printf "api     : %s\n" "$$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:8010/api/health || echo down)"
+	@printf "web     : %s\n" "$$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000 || echo down)"
+	@free -h | head -2
+	@echo "--- pipeline checkpoint:"
+	@$(PYTHON) -m btc_aml.cli status 2>/dev/null || echo "(database unreachable)"
+	@echo "--- last maintenance run:"
+	@-ls -t $(LOG_DIR)/maintenance-*.log 2>/dev/null | head -1 | xargs -r tail -3
+	@echo "--- last AI call:"
+	@-tail -1 $(LOG_DIR)/ai_audit.jsonl 2>/dev/null || echo "none"
+
+tail-all: ## Follow every log in one place (Ctrl-C to stop)
+	@mkdir -p $(LOG_DIR)
+	@touch $(LOG_DIR)/api.log $(LOG_DIR)/web.log $(LOG_DIR)/monitor.log
+	@LATEST=$$(ls -t $(LOG_DIR)/maintenance-*.log 2>/dev/null | head -1); \
+	 tail -F $(LOG_DIR)/api.log $(LOG_DIR)/web.log $(LOG_DIR)/monitor.log $${LATEST:-/dev/null} & \
+	 TAILPID=$$!; \
+	 journalctl -u llama-server.service -u ai-gateway.service -n 0 -f & \
+	 JPID=$$!; \
+	 trap 'kill $$TAILPID $$JPID 2>/dev/null' EXIT INT TERM; \
+	 wait
